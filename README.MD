@@ -1,3 +1,13 @@
+⚠️ Disclaimer
+This repository is a fork/copy of an existing project solely for the purpose of participating in ICP bootcamp.
+
+The original repository can be found here: https://github.com/motoko-bootcamp/bootcamp
+
+If you are the original author and have any concerns about this usage, please feel free to reach out.
+
+All rights and credits belong to the original creators of this project.
+No commercial use or redistribution is intended outside the hackathon submission.
+
 # The DAO Adventure - Starter
 
 > This repository contains the starter code for the DAO Adventure project. You are required to complete the code across all 7 chapters.
