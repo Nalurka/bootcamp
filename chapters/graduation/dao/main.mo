@@ -2,86 +2,248 @@ import Result "mo:base/Result";
 import Text "mo:base/Text";
 import Principal "mo:base/Principal";
 import Nat "mo:base/Nat";
+import Time "mo:base/Time";
+import Map "mo:map/Map";
+import Debug "mo:base/Debug";
+import Iter "mo:base/Iter";
 import Types "types";
+import Int "mo:base/Int";
+import Array "mo:base/Array";
+
 actor {
+    type Result<A, B> = Result.Result<A, B>;
+    type Member = Types.Member;
+    type ProposalContent = Types.ProposalContent;
+    type ProposalId = Types.ProposalId;
+    type Proposal = Types.Proposal;
+    type Vote = Types.Vote;
+    type HttpRequest = Types.HttpRequest;
+    type HttpResponse = Types.HttpResponse;
 
-        type Result<A, B> = Result.Result<A, B>;
-        type Member = Types.Member;
-        type ProposalContent = Types.ProposalContent;
-        type ProposalId = Types.ProposalId;
-        type Proposal = Types.Proposal;
-        type Vote = Types.Vote;
-        type HttpRequest = Types.HttpRequest;
-        type HttpResponse = Types.HttpResponse;
+    stable let canisterIdWebpage : Principal = Principal.fromText("75i2c-tiaaa-aaaab-qacxa-cai"); // À remplacer après déploiement
+    stable var manifesto = "Understand the DAO and motoko for web3";
+    stable let name = "DAO project";
+    stable var goals : [Text] = [];
+    
+    stable var membersStable : [(Principal, Member)] = [];
+    stable var nextProposalId : ProposalId = 0;
+    stable var proposalsStable : [(ProposalId, Proposal)] = [];
 
-        // The principal of the Webpage canister associated with this DAO canister (needs to be updated with the ID of your Webpage canister)
-        stable let canisterIdWebpage : Principal = Principal.fromText("aaaaa-aa");
-        stable var manifesto = "Your manifesto";
-        stable let name = "Your DAO";
-        stable var goals = [];
+    let members = Map.fromIter<Principal, Member>(membersStable.vals(), Map.phash);
+    let proposals = Map.fromIter<ProposalId, Proposal>(proposalsStable.vals(), Map.nhash);
 
-        // Returns the name of the DAO
-        public query func getName() : async Text {
-                return "Not implemented";
+    let tokenCanister = actor("jaamb-mqaaa-aaaaj-qa3ka-cai") : actor {
+        mint : (Principal, Nat) -> async Result.Result<(), Text>;
+        burn : (Principal, Nat) -> async Result.Result<(), Text>;
+        balanceOf : (Principal) -> async Nat;
+    };
+
+    let initialMentorPrincipal = Principal.fromText("nkqop-siaaa-aaaaj-qa3qq-cai");
+    if (Map.size(members) == 0) {
+        let initialMentor : Member = {
+            name = "motoko_bootcamp";
+            role = #Mentor;
+        };
+        Map.set(members, Map.phash, initialMentorPrincipal, initialMentor);
+    };
+
+    system func preupgrade() {
+    membersStable := Iter.toArray(Map.entries(members)); 
+    proposalsStable := Iter.toArray(Map.entries(proposals)); 
+    };
+
+    system func postupgrade() {
+        membersStable := [];
+        proposalsStable := [];
+    };
+
+    public query func getName() : async Text {
+        name
+    };
+
+    public query func getManifesto() : async Text {
+        manifesto
+    };
+
+    public query func getGoals() : async [Text] {
+        goals
+    };
+
+    public shared({ caller }) func registerMember(member : Member) : async Result<(), Text> {
+        if (Principal.isAnonymous(caller)) {
+            return #err("Not allowed if anonymous");
         };
 
-        // Returns the manifesto of the DAO
-        public query func getManifesto() : async Text {
-                return "Not implemented";
-        };
+        switch (Map.get(members, Map.phash, caller)) {
+            case (?_) #err("Member already exists");
+            case null {
+                let newMember = { name = member.name; role = #Student };
+                Map.set(members, Map.phash, caller, newMember);
+                
+                switch (await tokenCanister.mint(caller, 10)) {
+                    case (#err(e)) {
+                        Map.delete(members, Map.phash, caller);
+                        #err("Minting failed: " # e)
+                    };
+                    case _ #ok()
+                }
+            }
+        }
+    };
 
-        // Returns the goals of the DAO
-        public query func getGoals() : async [Text] {
-                return [];
-        };
+    public query func getMember(p : Principal) : async Result<Member, Text> {
+        switch (Map.get(members, Map.phash, p)) {
+            case (?member) #ok(member);
+            case null #err("Member not found")
+        }
+    };
 
-        // Register a new member in the DAO with the given name and principal of the caller
-        // Airdrop 10 MBC tokens to the new member
-        // New members are always Student
-        // Returns an error if the member already exists
-        public shared ({ caller }) func registerMember(member : Member) : async Result<(), Text> {
-                return #err("Not implemented");
-        };
+    public shared({ caller }) func graduate(student : Principal) : async Result<(), Text> {
+        switch (Map.get(members, Map.phash, caller), Map.get(members, Map.phash, student)) {
+            case (?{ role = #Mentor }, ?{ role = #Student; name }) {
+                Map.set(members, Map.phash, student, { name; role = #Graduate });
+                #ok()
+            };
+            case _ #err("Unauthorized")
+        }
+    };
 
-        // Get the member with the given principal
-        // Returns an error if the member does not exist
-        public query func getMember(p : Principal) : async Result<Member, Text> {
-                return #err("Not implemented");
-        };
+    public shared({ caller }) func createProposal(content : ProposalContent) : async Result<ProposalId, Text> {
+    switch (Map.get(members, Map.phash, caller)) {
+        case (?{ role = #Mentor }) {
+            let balance = await tokenCanister.balanceOf(caller); 
+            if (balance < 1) {
+                return #err("Insufficient tokens");
+            };
 
-        // Graduate the student with the given principal
-        // Returns an error if the student does not exist or is not a student
-        // Returns an error if the caller is not a mentor
-        public shared ({ caller }) func graduate(student : Principal) : async Result<(), Text> {
-                return #err("Not implemented");
-        };
+            switch (await tokenCanister.burn(caller, 1)) {
+                case (#ok()) {
+                    let proposalId = nextProposalId;
+                    nextProposalId += 1;
 
-        // Create a new proposal and returns its id
-        // Returns an error if the caller is not a mentor or doesn't own at least 1 MBC token
-        public shared ({ caller }) func createProposal(content : ProposalContent) : async Result<ProposalId, Text> {
-                return #err("Not implemented");
-        };
+                    let proposal : Proposal = {
+                        id = proposalId;
+                        content;
+                        creator = caller;
+                        created = Time.now();
+                        executed = null;
+                        votes = [];
+                        voteScore = 0;
+                        status = #Open;
+                    };
 
-        // Get the proposal with the given id
-        // Returns an error if the proposal does not exist
-        public query func getProposal(id : ProposalId) : async Result<Proposal, Text> {
-                return #err("Not implemented");
+                    Map.set(proposals, Map.nhash, proposalId, proposal);
+                    #ok(proposalId)
+                };
+                case (#err(e)) #err("Burn failed: " # e)
+            }
         };
+        case _ #err("Only mentors can create proposals, please be a mentor")
+        }
+    };
 
-        // Returns all the proposals
-        public query func getAllProposal() : async [Proposal] {
-                return [];
+    public query func getProposal(id : ProposalId) : async Result<Proposal, Text> {
+        switch (Map.get(proposals, Map.nhash, id)) {
+            case (?proposal) #ok(proposal);
+            case null #err("Not found")
+        }
+    };
+
+    public query func getAllProposal() : async [Proposal] {
+        Iter.toArray(Map.vals(proposals))
+    };
+
+    public shared({ caller }) func voteProposal(proposalId : ProposalId, yesOrNo : Bool) : async Result<(), Text> {
+    switch (Map.get(proposals, Map.nhash, proposalId), Map.get(members, Map.phash, caller)) {
+        case (?proposal, ?member) {
+            
+            if (proposal.status != #Open) {
+                return #err("Not open");
+            };
+
+            
+            if (member.role == #Student) {
+                return #err("Need an other role to vote / not student");
+            };
+
+            
+            let balance = await tokenCanister.balanceOf(caller);
+            let votingPower = switch (member.role) {
+                case (#Mentor) balance * 5;
+                case (#Graduate) balance;
+                case _ 0;  
+            };
+
+        
+            let voteScore = proposal.voteScore + (
+                if (yesOrNo) {
+                    votingPower;
+                } else {
+                    -votingPower;
+                }
+            );
+
+            let status = if (voteScore >= 100) #Accepted else if (voteScore <= -100) #Rejected else #Open;
+
+            
+            let vote : Vote = {
+                member = caller;
+                votingPower = votingPower;
+                yesOrNo = yesOrNo;
+            };
+
+            
+            let updatedProposal : Proposal = {
+                id = proposal.id;
+                content = proposal.content;
+                creator = proposal.creator;
+                created = proposal.created;
+                executed = proposal.executed;
+                votes = Array.append(proposal.votes, [vote]);
+                voteScore = voteScore;
+                status = status;
+            };
+
+            
+            Map.set(proposals, Map.nhash, proposalId, updatedProposal);
+
+        
+            if (status == #Accepted) {
+                await executeProposal(updatedProposal);
+            };
+
+            #ok()
         };
+        case _ {
+            #err("Invalid")
+            }
+        }
+    };
 
-        // Vote for the given proposal
-        // Returns an error if the proposal does not exist or the member is not allowed to vote
-        public shared ({ caller }) func voteProposal(proposalId : ProposalId, yesOrNo : Bool) : async Result<(), Text> {
-                return #err("Not implemented");
-        };
+    func executeProposal(proposal : Proposal) : async () {
+        switch (proposal.content) {
+            case (#ChangeManifesto(text)) {
+                manifesto := text;
+                let webpage = actor(Principal.toText(canisterIdWebpage)) : actor {
+                    setManifesto : shared (Text) -> async Result<(), Text>;
+                };
+                ignore await webpage.setManifesto(text);
+            };
+            case (#AddMentor(p)) {
+                switch (Map.get(members, Map.phash, p)) {
+                    case (?{ role = #Graduate; name }) {
+                        Map.set(members, Map.phash, p, { name; role = #Mentor })
+                    };
+                    case _ ()
+                }
+            };
+            case (#AddGoal(text)) {
+                goals := Array.append(goals, [text])
+            }
+        }
+    };
 
-        // Returns the Principal ID of the Webpage canister associated with this DAO canister
-        public query func getIdWebpage() : async Principal {
-                return canisterIdWebpage;
-        };
-
+    public query func getIdWebpage() : async Principal {
+        canisterIdWebpage
+    };
 };
